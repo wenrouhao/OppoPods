@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -24,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import moe.chenxy.oppopods.pods.NoiseControlMode
 import moe.chenxy.oppopods.ui.AppTheme
 import moe.chenxy.oppopods.ui.components.AncSwitch
@@ -74,7 +76,7 @@ class PopupActivity : ComponentActivity() {
 @Composable
 private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
     val context = LocalContext.current
-    val showDialog = remember { mutableStateOf(true) }
+    val showDialog = remember { mutableStateOf(false) }
 
     val prefs = remember { context.getSharedPreferences("oppopods_settings", Context.MODE_PRIVATE) }
     val themeMode = remember { prefs.getInt("theme_mode", 0) }
@@ -109,6 +111,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                     }
                     OppoPodsAction.ACTION_PODS_CONNECTED -> {
                         deviceName.value = p1.getStringExtra("device_name") ?: ""
+                        if (!showDialog.value) showDialog.value = true
                     }
                     OppoPodsAction.ACTION_PODS_DISCONNECTED -> {
                         showDialog.value = false
@@ -135,6 +138,18 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
 
         onDispose {
             try { context.unregisterReceiver(broadcastReceiver) } catch (_: Exception) {}
+        }
+    }
+
+    // Timeout fallback: show dialog even if no response within 500ms
+    // Periodic refresh: poll earbuds every 15s while popup is open
+    LaunchedEffect(Unit) {
+        delay(500)
+        if (!showDialog.value) showDialog.value = true
+
+        while (true) {
+            delay(15_000)
+            context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS))
         }
     }
 
