@@ -117,6 +117,7 @@ object MiBluetoothToastHook : YukiBaseHooker() {
                     val logo = createPicture("key_headset", headsetIcon)
                     enableFloat = true
                     ticker = alias ?: ""
+                    updatable = true
 //                    tickerPic = logo
 
                     iconTextInfo {
