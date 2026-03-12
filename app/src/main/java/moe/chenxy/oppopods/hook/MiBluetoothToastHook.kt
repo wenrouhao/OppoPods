@@ -10,6 +10,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
 import android.os.Bundle
 import android.util.Log
@@ -22,6 +23,7 @@ import moe.chenxy.oppopods.utils.SystemApisUtils
 import moe.chenxy.oppopods.utils.SystemApisUtils.cancelAsUser
 import moe.chenxy.oppopods.utils.SystemApisUtils.notifyAsUser
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
+import moe.chenxy.oppopods.R
 
 @SuppressLint("MissingPermission")
 object MiBluetoothToastHook : YukiBaseHooker() {
@@ -41,7 +43,6 @@ object MiBluetoothToastHook : YukiBaseHooker() {
             val miheadset_notification_RightEar = context.resources.getIdentifier("miheadset_notification_RightEar", "string", "com.xiaomi.bluetooth")
             val miheadset_notification_Disconnect = context.resources.getIdentifier("miheadset_notification_Disconnect", "string", "com.xiaomi.bluetooth")
             val system_notification_accent_color = context.resources.getIdentifier("system_notification_accent_color", "color", "android")
-            val ic_headset_notification = context.resources.getIdentifier("ic_headset_notification", "drawable", "com.xiaomi.bluetooth")
 
             if (bluetoothDevice == null) {
                 Log.e("OppoPods", "createPodsNotification: btDevice null")
@@ -55,17 +56,17 @@ object MiBluetoothToastHook : YukiBaseHooker() {
                 }
 
                 val caseBattStr = if (batteryParams.case != null && batteryParams.case!!.isConnected)
-                    "${context.resources.getString(miheadset_notification_Box)}：${batteryParams.case!!.battery} %" +
-                            "${if (batteryParams.case!!.isCharging) " ⚡" else ""}\n"
+                    "${context.resources.getString(miheadset_notification_Box)}${batteryParams.case!!.battery}%" +
+                            "${if (batteryParams.case!!.isCharging) "⚡ " else " "}\n"
                 else ""
                 val leftEar = if (batteryParams.left != null && batteryParams.left!!.isConnected)
-                    "${context.resources.getString(miheadset_notification_LeftEar)}：${batteryParams.left!!.battery} %" +
-                        (if (batteryParams.left!!.isCharging) " ⚡" else "")
+                    "${context.resources.getString(miheadset_notification_LeftEar)}${batteryParams.left!!.battery}%" +
+                        (if (batteryParams.left!!.isCharging) "⚡" else "")
                 else ""
-                val leftToRight = if (batteryParams.left?.isConnected == true && batteryParams.right?.isConnected == true) " | " else ""
+                val leftToRight = if (batteryParams.left?.isConnected == true && batteryParams.right?.isConnected == true) "|" else ""
                 val rightEar = if (batteryParams.right != null && batteryParams.right!!.isConnected)
-                    "$leftToRight${context.resources.getString(miheadset_notification_RightEar)}：${batteryParams.right!!.battery} %" +
-                        (if (batteryParams.right!!.isCharging) " ⚡" else "")
+                    "$leftToRight${context.resources.getString(miheadset_notification_RightEar)}${batteryParams.right!!.battery}%" +
+                        (if (batteryParams.right!!.isCharging) "⚡ " else " ")
                 else ""
 
                 val contentText: String = caseBattStr + leftEar + rightEar
@@ -91,7 +92,12 @@ object MiBluetoothToastHook : YukiBaseHooker() {
                     context.resources.getString(miheadset_notification_Disconnect),
                     PendingIntent.getBroadcast(context, 0, intent, 201326592)
                 )
-                val headsetIcon = Icon.createWithResource(context, ic_headset_notification)
+                val moduleContext = context.createPackageContext(
+                    "moe.chenxy.oppopods", Context.CONTEXT_IGNORE_SECURITY
+                )
+                val headsetIcon = Icon.createWithBitmap(
+                    BitmapFactory.decodeResource(moduleContext.resources, R.drawable.img_box)
+                )
                 val pendingIntent = PendingIntent.getActivity(
                     context,
                     0,
@@ -104,11 +110,11 @@ object MiBluetoothToastHook : YukiBaseHooker() {
                     val logo = createPicture("key_headset", headsetIcon)
                     enableFloat = true
                     ticker = alias ?: ""
-                    tickerPic = logo
+//                    tickerPic = logo
 
                     iconTextInfo {
                         animIconInfo{
-                            type = 1
+                            type = 0
                             src = logo
                         }
                         title = alias ?: ""
@@ -141,6 +147,22 @@ object MiBluetoothToastHook : YukiBaseHooker() {
 //                            action = createAction("key_disconnect", disconnectAction)
 //                        }
 //                    }
+                }
+                // AOD 息屏显示：左右耳电量拼合后注入 aodTitle
+                if (focusExtras != null) {
+                    val aodParts = mutableListOf<String>()
+                    if (batteryParams.left?.isConnected == true)
+                        aodParts.add("L ${batteryParams.left!!.battery}%")
+                    if (batteryParams.right?.isConnected == true)
+                        aodParts.add("R ${batteryParams.right!!.battery}%")
+                    val aodTitle = aodParts.joinToString(" | ")
+                    try {
+                        val json = org.json.JSONObject(focusExtras.getString("miui.focus.param") ?: "{}")
+                        val pv2 = json.optJSONObject("param_v2") ?: org.json.JSONObject()
+                        pv2.put("aodTitle", aodTitle)
+                        json.put("param_v2", pv2)
+                        focusExtras.putString("miui.focus.param", json.toString())
+                    } catch (_: Exception) {}
                 }
                 notificationManager.notifyAsUser(
                     "BTHeadset$address",
