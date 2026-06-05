@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import moe.chenxy.oppopods.pods.RfcommController
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
@@ -181,7 +182,7 @@ object MiLinkServiceHook : HookContext() {
                     }
                     OppoPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        currentBattery = intent.parcelableStatus() ?: currentBattery
+                        currentBattery = intent.batteryStatusFromExtras() ?: intent.parcelableStatus() ?: currentBattery
                         currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
                         saveState(context)
                     }
@@ -249,10 +250,31 @@ object MiLinkServiceHook : HookContext() {
 
     private fun miLinkBatteryLevels(): List<Int> {
         loadState()
+        syncBluetoothBackendState()
         val left = batteryValue(currentBattery.left)
         val right = batteryValue(currentBattery.right)
         val box = batteryValue(currentBattery.case)
-        return listOf(box, left, right, 0, 0, 0)
+        return listOf(
+            box,
+            left,
+            right,
+            chargingValue(currentBattery.case),
+            chargingValue(currentBattery.left),
+            chargingValue(currentBattery.right)
+        )
+    }
+
+    private fun syncBluetoothBackendState() {
+        val localSnapshot = runCatching { RfcommController.currentStatusSnapshot() }
+            .getOrNull()
+            ?.takeIf { it.address != null || it.battery != null }
+        localSnapshot?.battery?.let { currentBattery = it }
+        localSnapshot?.anc?.let { currentAnc = it }
+        localSnapshot?.address?.let {
+            currentAddress = it
+            knownOppoAddresses.add(it.uppercase())
+        }
+        localSnapshot?.deviceName?.let { currentName = it }
     }
 
     private fun batteryPercentForMiLink(): Int {
@@ -264,8 +286,12 @@ object MiLinkServiceHook : HookContext() {
     }
 
     private fun batteryValue(params: moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams?): Int {
-        if (params?.isConnected != true) return 255
+        if (params?.isConnected != true) return -1
         return params.battery.coerceIn(0, 100)
+    }
+
+    private fun chargingValue(params: moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams?): Int {
+        return if (params?.isConnected == true && params.isCharging) 1 else 0
     }
 
     private fun sendOppoAnc(mode: Int, fallbackContext: Context? = null) {
@@ -310,8 +336,32 @@ object MiLinkServiceHook : HookContext() {
             ?: runCatching { getParcelableExtra<BatteryParams>("status") }.getOrNull()
     }
 
+    private fun Intent.batteryStatusFromExtras(): BatteryParams? {
+        if (!hasExtra("left_connected") && !hasExtra("right_connected") && !hasExtra("case_connected")) return null
+        return BatteryParams(
+            left = PodParams(
+                getIntExtra("left_battery", 0),
+                getBooleanExtra("left_charging", false),
+                getBooleanExtra("left_connected", false),
+                0
+            ),
+            right = PodParams(
+                getIntExtra("right_battery", 0),
+                getBooleanExtra("right_charging", false),
+                getBooleanExtra("right_connected", false),
+                0
+            ),
+            case = PodParams(
+                getIntExtra("case_battery", 0),
+                getBooleanExtra("case_charging", false),
+                getBooleanExtra("case_connected", false),
+                0
+            )
+        )
+    }
+
     private fun BatteryParams.debugString(): String {
-        return "left=${left?.battery}/${left?.isConnected} right=${right?.battery}/${right?.isConnected} case=${case?.battery}/${case?.isConnected}"
+        return "left=${left?.battery}/${left?.isCharging}/${left?.isConnected} right=${right?.battery}/${right?.isCharging}/${right?.isConnected} case=${case?.battery}/${case?.isCharging}/${case?.isConnected}"
     }
 
     private fun saveState(ctx: Context?) {
@@ -321,10 +371,13 @@ object MiLinkServiceHook : HookContext() {
             .putString("name", currentName)
             .putInt("anc", currentAnc)
             .putInt("left_battery", currentBattery.left?.battery ?: 0)
+            .putBoolean("left_charging", currentBattery.left?.isCharging == true)
             .putBoolean("left_connected", currentBattery.left?.isConnected == true)
             .putInt("right_battery", currentBattery.right?.battery ?: 0)
+            .putBoolean("right_charging", currentBattery.right?.isCharging == true)
             .putBoolean("right_connected", currentBattery.right?.isConnected == true)
             .putInt("case_battery", currentBattery.case?.battery ?: 0)
+            .putBoolean("case_charging", currentBattery.case?.isCharging == true)
             .putBoolean("case_connected", currentBattery.case?.isConnected == true)
             .apply()
     }
@@ -338,19 +391,19 @@ object MiLinkServiceHook : HookContext() {
         currentBattery = BatteryParams(
             left = PodParams(
                 prefs.getInt("left_battery", currentBattery.left?.battery ?: 0),
-                false,
+                prefs.getBoolean("left_charging", currentBattery.left?.isCharging == true),
                 prefs.getBoolean("left_connected", currentBattery.left?.isConnected == true),
                 0
             ),
             right = PodParams(
                 prefs.getInt("right_battery", currentBattery.right?.battery ?: 0),
-                false,
+                prefs.getBoolean("right_charging", currentBattery.right?.isCharging == true),
                 prefs.getBoolean("right_connected", currentBattery.right?.isConnected == true),
                 0
             ),
             case = PodParams(
                 prefs.getInt("case_battery", currentBattery.case?.battery ?: 0),
-                false,
+                prefs.getBoolean("case_charging", currentBattery.case?.isCharging == true),
                 prefs.getBoolean("case_connected", currentBattery.case?.isConnected == true),
                 0
             )
