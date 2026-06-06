@@ -41,18 +41,25 @@ import androidx.core.content.ContextCompat
 import moe.chenxy.oppopods.R
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 @SuppressLint("MissingPermission")
 @Composable
 fun DevicePickerPage(
     connectedDeviceName: String = "",
+    connectedDeviceAddress: String = "",
+    connectingDeviceAddress: String? = null,
+    showConnectError: Boolean = false,
     bottomContentPadding: Dp = 16.dp,
     onDeviceSelected: (BluetoothDevice) -> Unit,
+    onDismissConnectError: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var hasPermission by remember {
@@ -123,7 +130,12 @@ fun DevicePickerPage(
                 DeviceRow(
                     title = device.name ?: stringResource(R.string.unknown_device),
                     summary = device.address,
-                    connected = connectedDeviceName.isNotBlank() && device.name == connectedDeviceName,
+                    connected = device.address == connectedDeviceAddress || (
+                        connectedDeviceAddress.isBlank() &&
+                            connectedDeviceName.isNotBlank() &&
+                            device.name == connectedDeviceName
+                    ),
+                    connecting = device.address == connectingDeviceAddress,
                     onClick = { onDeviceSelected(device) },
                 )
             }
@@ -176,10 +188,30 @@ fun DevicePickerPage(
             )
         }
     }
+
+    WindowDialog(
+        title = stringResource(R.string.connect_failed),
+        show = showConnectError,
+        onDismissRequest = onDismissConnectError,
+    ) {
+        val dismiss = LocalDismissState.current
+        TextButton(
+            text = stringResource(R.string.confirm),
+            onClick = { dismiss?.invoke() },
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.textButtonColorsPrimary(),
+        )
+    }
 }
 
 @Composable
-private fun DeviceRow(title: String, summary: String, connected: Boolean, onClick: () -> Unit) {
+private fun DeviceRow(
+    title: String,
+    summary: String,
+    connected: Boolean,
+    connecting: Boolean,
+    onClick: () -> Unit,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -187,18 +219,26 @@ private fun DeviceRow(title: String, summary: String, connected: Boolean, onClic
             .clip(RoundedCornerShape(16.dp))
             .clickable(role = Role.Button, onClick = onClick)
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
-            Text(
-                text = title,
-                color = if (connected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
-                style = MiuixTheme.textStyles.headline1,
-            )
-            Text(
-                text = summary,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                style = MiuixTheme.textStyles.body2,
-                modifier = Modifier.padding(top = 2.dp),
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = if (connected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                    style = MiuixTheme.textStyles.headline1,
+                )
+                Text(
+                    text = summary,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MiuixTheme.textStyles.body2,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            if (connecting) {
+                InfiniteProgressIndicator()
+            }
         }
     }
 }

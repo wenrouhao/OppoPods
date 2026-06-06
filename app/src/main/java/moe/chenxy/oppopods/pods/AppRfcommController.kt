@@ -51,6 +51,9 @@ class AppRfcommController {
     private val _deviceName = MutableStateFlow("")
     val deviceName: StateFlow<String> = _deviceName
 
+    private val _deviceAddress = MutableStateFlow("")
+    val deviceAddress: StateFlow<String> = _deviceAddress
+
     private val _gameMode = MutableStateFlow(false)
     val gameMode: StateFlow<Boolean> = _gameMode
 
@@ -67,6 +70,7 @@ class AppRfcommController {
         if (_connectionState.value == ConnectionState.CONNECTING) return
 
         _deviceName.value = device.name ?: device.address
+        _deviceAddress.value = device.address
         _connectionState.value = ConnectionState.CONNECTING
 
         scope.launch {
@@ -282,6 +286,7 @@ class AppRfcommController {
         _batteryParams.value = BatteryParams()
         _ancMode.value = NoiseControlMode.OFF
         _deviceName.value = ""
+        _deviceAddress.value = ""
         _gameMode.value = false
         _transparencyVocalEnhancement.value = false
     }

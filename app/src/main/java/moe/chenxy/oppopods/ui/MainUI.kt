@@ -14,21 +14,11 @@ import android.content.pm.PackageManager
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -36,17 +26,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
@@ -85,8 +71,6 @@ import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.basic.rememberTopAppBarState
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
@@ -144,6 +128,8 @@ fun MainUI(
     var showDevicePicker by remember { mutableStateOf(false) }
     var showRestartScopeDialog by remember { mutableStateOf(false) }
     var restartingScopes by remember { mutableStateOf(false) }
+    var connectingDeviceAddress by remember { mutableStateOf<String?>(null) }
+    var showConnectErrorDialog by remember { mutableStateOf(false) }
     val backgroundColor = appBackground()
     val overlayBottomBar = floatingBottomBar.value || blurBottomBar.value
     val pageBottomContentPadding = if (overlayBottomBar) 104.dp else 28.dp
@@ -172,6 +158,7 @@ fun MainUI(
     val appBattery by appController.batteryParams.collectAsState()
     val appAnc by appController.ancMode.collectAsState()
     val appDeviceName by appController.deviceName.collectAsState()
+    val appDeviceAddress by appController.deviceAddress.collectAsState()
     val appGameMode by appController.gameMode.collectAsState()
     val appTransparencyVocalEnhancement by appController.transparencyVocalEnhancement.collectAsState()
 
@@ -188,7 +175,6 @@ fun MainUI(
     val displayTitle = when {
         hookConnected.value -> mainTitle.value
         isStandaloneConnected -> appDeviceName
-        isConnecting -> stringResource(R.string.connecting)
         else -> ""
     }
 
@@ -207,8 +193,18 @@ fun MainUI(
 
     LaunchedEffect(isStandaloneConnected) {
         if (isStandaloneConnected) {
+            connectingDeviceAddress = null
+            showConnectErrorDialog = false
             showDevicePicker = false
             selectedTab = MainTab.Earphones
+        }
+    }
+
+    LaunchedEffect(isError) {
+        if (isError) {
+            connectingDeviceAddress = null
+            showConnectErrorDialog = true
+            showDevicePicker = true
         }
     }
 
@@ -340,7 +336,9 @@ fun MainUI(
     }
 
     fun onDeviceSelected(device: BluetoothDevice) {
-        showDevicePicker = false
+        connectingDeviceAddress = device.address
+        showConnectErrorDialog = false
+        showDevicePicker = true
         appController.connect(device, autoGameMode = autoGameMode.value)
     }
 
@@ -415,13 +413,6 @@ fun MainUI(
                                         contentDescription = "Restart scope"
                                     )
                                 }
-                            } else if (selectedTab == MainTab.Earphones && canShowDetailPage) {
-                                IconButton(onClick = { refreshStatus() }) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Refresh,
-                                        contentDescription = "Refresh"
-                                    )
-                                }
                             }
                         }
                     )
@@ -463,8 +454,6 @@ fun MainUI(
                             MainTab.Earphones -> AnimatedContent(
                                 targetState = when {
                                     showEarphoneDetail -> "detail"
-                                    isConnecting -> "connecting"
-                                    isError -> "error"
                                     else -> "picker"
                                 },
                                 label = "EarphonesPageAnim"
@@ -486,12 +475,17 @@ fun MainUI(
                                         adaptiveModeEnabled = adaptiveMode.value
                                     )
 
-                                    "connecting" -> ConnectingPage()
-                                    "error" -> ErrorPage(onRetry = { appController.disconnect() })
                                     else -> DevicePickerPage(
                                         connectedDeviceName = displayTitle,
+                                        connectedDeviceAddress = if (isStandaloneConnected) appDeviceAddress else "",
+                                        connectingDeviceAddress = connectingDeviceAddress,
+                                        showConnectError = showConnectErrorDialog,
                                         bottomContentPadding = pageBottomContentPadding,
-                                        onDeviceSelected = { onDeviceSelected(it) }
+                                        onDeviceSelected = { onDeviceSelected(it) },
+                                        onDismissConnectError = {
+                                            showConnectErrorDialog = false
+                                            appController.disconnect()
+                                        },
                                     )
                                 }
                             }
@@ -768,58 +762,5 @@ private fun broadcastConfigChanged(context: Context, packageName: String) {
         setPackage(packageName)
         addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         context.sendBroadcast(this)
-    }
-}
-
-@Composable
-fun ConnectingPage() {
-    val primaryColor = MiuixTheme.colorScheme.primary
-    val infiniteTransition = rememberInfiniteTransition(label = "loading")
-    val angle by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation"
-    )
-
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Canvas(modifier = Modifier.size(48.dp)) {
-                drawArc(
-                    color = primaryColor,
-                    startAngle = angle,
-                    sweepAngle = 270f,
-                    useCenter = false,
-                    style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
-                )
-            }
-            Text(
-                stringResource(R.string.connecting),
-                modifier = Modifier.padding(top = 16.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun ErrorPage(onRetry: () -> Unit) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                stringResource(R.string.connect_failed),
-                color = Color(0xFFFF3B30)
-            )
-            TextButton(
-                text = stringResource(R.string.retry),
-                onClick = onRetry,
-                modifier = Modifier.padding(top = 12.dp)
-            )
-        }
     }
 }
