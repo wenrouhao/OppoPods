@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -39,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
@@ -61,8 +63,14 @@ import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.config.ConfigManager
 import moe.chenxy.oppopods.pods.AppRfcommController
 import moe.chenxy.oppopods.pods.NoiseControlMode
+import moe.chenxy.oppopods.ui.components.RestartScope
+import moe.chenxy.oppopods.ui.components.RestartScopeDialog
+import moe.chenxy.oppopods.utils.RootManager
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.FloatingNavigationBar
@@ -115,18 +123,22 @@ fun MainUI(
     onAppLanguageChange: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     val mainTitle = remember { mutableStateOf("") }
     val batteryParams = remember { mutableStateOf(BatteryParams()) }
     val ancMode = remember { mutableStateOf(NoiseControlMode.OFF) }
     val hookConnected = remember { mutableStateOf(false) }
     val gameMode = remember { mutableStateOf(false) }
+    val transparencyVocalEnhancement = remember { mutableStateOf(false) }
     val tabs = remember { MainTab.entries.toList() }
     var selectedTab by remember { mutableStateOf(MainTab.Module) }
     var hasAppliedDefaultTab by remember { mutableStateOf(false) }
     var bluetoothState by remember { mutableStateOf(readBluetoothState(context)) }
     var xposedService by remember { mutableStateOf(OppoPodsApp.xposedService) }
     var showDevicePicker by remember { mutableStateOf(false) }
+    var showRestartScopeDialog by remember { mutableStateOf(false) }
+    var restartingScopes by remember { mutableStateOf(false) }
     val colorMode = when (themeMode.value) {
         1 -> ColorSchemeMode.Light
         2 -> ColorSchemeMode.Dark
@@ -161,6 +173,7 @@ fun MainUI(
     val appAnc by appController.ancMode.collectAsState()
     val appDeviceName by appController.deviceName.collectAsState()
     val appGameMode by appController.gameMode.collectAsState()
+    val appTransparencyVocalEnhancement by appController.transparencyVocalEnhancement.collectAsState()
 
     val isStandaloneConnected = appConnState == AppRfcommController.ConnectionState.CONNECTED
     val isConnecting = appConnState == AppRfcommController.ConnectionState.CONNECTING
@@ -171,6 +184,7 @@ fun MainUI(
     val displayBattery = if (isStandaloneConnected) appBattery else batteryParams.value
     val displayAnc = if (isStandaloneConnected) appAnc else ancMode.value
     val displayGameMode = if (isStandaloneConnected) appGameMode else gameMode.value
+    val displayTransparencyVocalEnhancement = if (isStandaloneConnected) appTransparencyVocalEnhancement else transparencyVocalEnhancement.value
     val displayTitle = when {
         hookConnected.value -> mainTitle.value
         isStandaloneConnected -> appDeviceName
@@ -222,6 +236,10 @@ fun MainUI(
                             p1.getParcelableExtra("status", BatteryParams::class.java)!!
                     }
 
+                    OppoPodsAction.ACTION_PODS_TRANSPARENCY_VOCAL_ENHANCEMENT_CHANGED -> {
+                        transparencyVocalEnhancement.value = p1.getBooleanExtra("enabled", false)
+                    }
+
                     OppoPodsAction.ACTION_PODS_CONNECTED -> {
                         val deviceName = p1.getStringExtra("device_name")
                         mainTitle.value = deviceName ?: ""
@@ -257,6 +275,7 @@ fun MainUI(
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED)
+            addAction(OppoPodsAction.ACTION_PODS_TRANSPARENCY_VOCAL_ENHANCEMENT_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_CONNECTED)
             addAction(OppoPodsAction.ACTION_PODS_DISCONNECTED)
             addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
@@ -308,6 +327,18 @@ fun MainUI(
         }
     }
 
+    fun setTransparencyVocalEnhancement(enabled: Boolean) {
+        if (isStandaloneConnected) {
+            appController.setTransparencyVocalEnhancement(enabled)
+            return
+        }
+        transparencyVocalEnhancement.value = enabled
+        Intent(OppoPodsAction.ACTION_TRANSPARENCY_VOCAL_ENHANCEMENT_SET).apply {
+            this.putExtra("enabled", enabled)
+            context.sendBroadcast(this)
+        }
+    }
+
     fun onDeviceSelected(device: BluetoothDevice) {
         showDevicePicker = false
         appController.connect(device, autoGameMode = autoGameMode.value)
@@ -325,6 +356,23 @@ fun MainUI(
             appController.refreshStatus()
         } else if (hookConnected.value) {
             context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS))
+        }
+    }
+
+    fun restartScopes(packages: List<String>) {
+        if (packages.isEmpty() || restartingScopes) return
+        restartingScopes = true
+        coroutineScope.launch {
+            val success = withContext(Dispatchers.IO) {
+                RootManager.restartPackages(packages)
+            }
+            restartingScopes = false
+            showRestartScopeDialog = false
+            Toast.makeText(
+                context,
+                if (success) R.string.restart_scope_success else R.string.restart_scope_failed,
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
 
@@ -354,7 +402,20 @@ fun MainUI(
                             }
                         },
                         actions = {
-                            if (selectedTab == MainTab.Earphones && canShowDetailPage) {
+                            if (selectedTab == MainTab.Module) {
+                                IconButton(
+                                    onClick = {
+                                        if (!restartingScopes) {
+                                            showRestartScopeDialog = true
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = MiuixIcons.Refresh,
+                                        contentDescription = "Restart scope"
+                                    )
+                                }
+                            } else if (selectedTab == MainTab.Earphones && canShowDetailPage) {
                                 IconButton(onClick = { refreshStatus() }) {
                                     Icon(
                                         imageVector = MiuixIcons.Refresh,
@@ -418,6 +479,8 @@ fun MainUI(
                                         batteryParams = displayBattery,
                                         ancMode = displayAnc,
                                         onAncModeChange = { setAncMode(it) },
+                                        transparencyVocalEnhancement = displayTransparencyVocalEnhancement,
+                                        onTransparencyVocalEnhancementChange = { setTransparencyVocalEnhancement(it) },
                                         gameMode = displayGameMode,
                                         onGameModeChange = { setGameMode(it) },
                                         adaptiveModeEnabled = adaptiveMode.value
@@ -475,7 +538,7 @@ fun MainUI(
                                         context.sendBroadcast(this)
                                     }
                                     if (!it && displayAnc == NoiseControlMode.ADAPTIVE) {
-                                        setAncMode(NoiseControlMode.NOISE_CANCELLATION_MEDIUM)
+                                        setAncMode(NoiseControlMode.NOISE_CANCELLATION)
                                     }
                                 },
                                 fakeDeviceId = fakeDeviceId,
@@ -493,6 +556,13 @@ fun MainUI(
                         }
                     }
                 }
+
+                RestartScopeDialog(
+                    show = showRestartScopeDialog,
+                    scopes = restartScopeOptions,
+                    onDismissRequest = { if (!restartingScopes) showRestartScopeDialog = false },
+                    onConfirm = { restartScopes(it) },
+                )
             }
         }
         entry<Screen.About> {
@@ -585,6 +655,13 @@ fun MainUI(
         }
     )
 }
+
+private val restartScopeOptions = listOf(
+    RestartScope("com.android.bluetooth", "Bluetooth"),
+    //RestartScope("com.android.settings", "Settings"),
+    RestartScope("com.milink.service", "MiLink Service"),
+    RestartScope("com.xiaomi.bluetooth", "Mi Bluetooth"),
+)
 
 private fun PaddingValues.withoutBottom(): PaddingValues {
     return PaddingValues(

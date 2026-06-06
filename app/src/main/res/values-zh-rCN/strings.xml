@@ -22,6 +22,8 @@
     <string name="noise_cancellation_medium">中度</string>
     <string name="noise_cancellation_deep">深度</string>
     <string name="transparency_title">通透</string>
+    <string name="transparency_vocal_enhancement">人声增强</string>
+    <string name="transparency_vocal_enhancement_summary">在通透模式下增强人声</string>
     <string name="adaptive_title">自适应</string>
     <string name="pod_case">耳机盒</string>
     <string name="batt_left_pod">左</string>
@@ -74,4 +76,8 @@
     <string name="fake_device_id">伪装耳机型号</string>
     <string name="fake_device_id_summary">留空时默认使用 01010607</string>
     <string name="notification_btn_disconnect">断开连接</string>
+    <string name="restart_scope_title">重启作用域</string>
+    <string name="restart_scope_summary">选择要通过 root 重启的作用域软件。</string>
+    <string name="restart_scope_success">作用域已重启</string>
+    <string name="restart_scope_failed">Root 重启失败</string>
 </resources>
