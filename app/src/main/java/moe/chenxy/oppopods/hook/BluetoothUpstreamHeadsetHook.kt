@@ -24,6 +24,11 @@ import org.json.JSONObject
 class BluetoothUpstreamHeadsetHook : HookContext() {
     private val TAG = "OppoPods-Upstream"
     private val DESCRIPTOR = "com.android.bluetooth.ble.app.IMiuiHeadsetService"
+    private companion object {
+        const val HFP_STATE_CONNECTED = 2
+        const val TOAST_RETRY_DELAY_MS = 300L
+        const val TOAST_MAX_RETRIES = 10
+    }
     private val knownOppoAddresses = linkedSetOf<String>()
     private val callbacks = linkedMapOf<IBinder, Any>()
     private val handler = Handler(Looper.getMainLooper())
@@ -84,7 +89,35 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
         val notificationClass = findClassOrNull("com.android.bluetooth.ble.app.MiuiBluetoothNotification")
         val requestClass = findClassOrNull("com.android.bluetooth.ble.app.C4705R2")
+
+        // 绕过云端配置检查，否则 OPPO 耳机连接通知会被拦截
+        val y2Class = findClassOrNull("com.android.bluetooth.ble.app.Y2")
+        if (y2Class != null) {
+            runCatching {
+                val y2dMethod = y2Class.declaredMethods.firstOrNull {
+                    it.name == "d" && it.parameterTypes.size == 2 && it.returnType == Boolean::class.javaPrimitiveType
+                }
+                if (y2dMethod != null) {
+                    hookBefore(y2dMethod) { result = true }
+                }
+            }.onFailure { Log.d(TAG, "hook Y2.d skipped", it) }
+        }
+
         if (notificationClass != null) {
+            // OPPO 耳机连接时主动触发超级岛弹窗
+            runCatching {
+                val hfpChangedMethod = notificationClass.declaredMethods.firstOrNull {
+                    it.name == "handleHfpChangedForLea" && it.parameterTypes.size == 2
+                }
+                if (hfpChangedMethod != null) {
+                    hookAfter(hfpChangedMethod) {
+                        val device = args[0] as? BluetoothDevice ?: return@hookAfter
+                        val state = args[1] as? Int ?: return@hookAfter
+                        if (!isOppoPod(device) || state != HFP_STATE_CONNECTED) return@hookAfter
+                        showConnectedToastWithRetry(instance, device)
+                    }
+                }
+            }.onFailure { Log.d(TAG, "hook handleHfpChangedForLea skipped", it) }
             runCatching {
                 hookBefore(notificationClass.method("invokeStatusBar", Context::class.java, String::class.java, Bundle::class.java)) {
                     val bundle = args[2] as? Bundle
@@ -604,6 +637,21 @@ class BluetoothUpstreamHeadsetHook : HookContext() {
 
     private fun Parcel.readDevice(): BluetoothDevice? {
         return if (readInt() != 0) BluetoothDevice.CREATOR.createFromParcel(this) else null
+    }
+
+    // 等电池数据就绪后弹超级岛，带重试
+    private fun showConnectedToastWithRetry(notification: Any?, device: BluetoothDevice, retriesLeft: Int = TOAST_MAX_RETRIES) {
+        val battery = effectiveBattery()
+        if (battery == null && retriesLeft > 0) {
+            handler.postDelayed({ showConnectedToastWithRetry(notification, device, retriesLeft - 1) }, TOAST_RETRY_DELAY_MS)
+            return
+        }
+        val leftBattery = battery?.let { displayBattery(it.left) } ?: 0
+        val rightBattery = battery?.let { displayBattery(it.right) } ?: 0
+        val wearState = battery?.let { w -> displayWearState(w, 1) } ?: 1
+        runCatching {
+            callMethod(notification, "showConnectedToast", 2, leftBattery, rightBattery, wearState, device, device.name)
+        }
     }
 
     private fun isOppoPod(device: BluetoothDevice?): Boolean {
