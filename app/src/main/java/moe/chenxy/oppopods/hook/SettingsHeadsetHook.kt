@@ -6,13 +6,18 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.widget.ImageView
 import moe.chenxy.oppopods.BuildConfig
+import moe.chenxy.oppopods.config.PodImagePrefs
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
+import java.io.File
 import java.util.WeakHashMap
 
 @SuppressLint("MissingPermission")
@@ -54,6 +59,7 @@ object SettingsHeadsetHook : HookContext() {
         hookServiceProxy()
         hookBatteryView()
         hookFragmentState()
+        hookHeadsetImage()
     }
 
     private fun hookActivityEntry() {
@@ -314,6 +320,17 @@ object SettingsHeadsetHook : HookContext() {
             }
         }.onFailure { Log.w(TAG, "hook MiuiHeadsetFragment.onServiceConnected skipped", it) }
 
+        // Hook onStop，页面不可见时停止刷新
+        runCatching {
+            hookAfter(findMethodByParamCount("com.android.settings.bluetooth.MiuiHeadsetFragment", "onStop", 0)) {
+                Log.d(TAG, "Fragment.onStop after ${fragmentDebug(instance)}")
+                headsetFragments.remove(instance)
+                refreshLoopStarted = false
+                refreshHandler.removeCallbacks(refreshRunnable)
+                Log.d(TAG, "settings periodic refresh stopped: fragment stopped")
+            }
+        }.onFailure { Log.w(TAG, "hook MiuiHeadsetFragment.onStop skipped", it) }
+
         runCatching {
             hookBefore(findMethod("com.android.settings.bluetooth.MiuiHeadsetFragment", "refreshStatus", String::class.java, String::class.java)) {
                 val key = args[0] as? String
@@ -364,6 +381,101 @@ object SettingsHeadsetHook : HookContext() {
                 Log.d(TAG, "MiuiHeadsetFragment.$methodName handled oppoMode=$oppoMode")
             }
         }.onFailure { Log.w(TAG, "hook MiuiHeadsetFragment.$methodName skipped", it) }
+    }
+
+    private fun hookHeadsetImage() {
+        hookLoadDefaultInternal()
+        hookUpdateService()
+    }
+
+    private fun hookLoadDefaultInternal() {
+        runCatching {
+            hookBefore(findMethodByParamCount(
+                "com.android.settings.bluetooth.tws.MiuiHeadsetAnimation", "loadDefaultInternal", 0
+            )) {
+                val animation = instance ?: return@hookBefore
+                val rootView = getAnimationRootView(animation) ?: return@hookBefore
+                if (!isOppoAnimation(animation)) return@hookBefore
+
+                val oppoBitmap = loadOppoHeadsetImage() ?: return@hookBefore
+                setHeadsetImage(rootView, oppoBitmap)
+                runCatching { setObjectField(animation, "mInited", true) }
+            }
+            Log.d(TAG, "MiuiHeadsetAnimation.loadDefaultInternal hook installed")
+        }.onFailure { Log.w(TAG, "hook MiuiHeadsetAnimation.loadDefaultInternal skipped", it) }
+    }
+
+    private fun hookUpdateService() {
+        runCatching {
+            hookAfter(findMethod(
+                "com.android.settings.bluetooth.tws.MiuiHeadsetAnimation", "updateService",
+                findClass("com.android.bluetooth.ble.app.IMiuiHeadsetService")
+            )) {
+                val animation = instance ?: return@hookAfter
+                Handler(Looper.getMainLooper()).postDelayed({
+                    val rootView = getAnimationRootView(animation) ?: return@postDelayed
+                    if (!isOppoAnimation(animation)) return@postDelayed
+
+                    val oppoBitmap = loadOppoHeadsetImage() ?: return@postDelayed
+                    setHeadsetImage(rootView, oppoBitmap)
+                }, 100)
+            }
+            Log.d(TAG, "MiuiHeadsetAnimation.updateService hook installed")
+        }.onFailure { Log.w(TAG, "hook MiuiHeadsetAnimation.updateService skipped", it) }
+    }
+
+    private fun getAnimationRootView(animation: Any): Any? {
+        return runCatching { getObjectField(animation, "mRootView") }.getOrNull()
+            ?.let { (it as? java.lang.ref.WeakReference<*>)?.get() }
+    }
+
+    private fun isOppoAnimation(animation: Any): Boolean {
+        val deviceId = runCatching { getObjectField(animation, "mDeviceId") as? String }.getOrNull()
+        return (deviceId != null && isOppoDeviceId(deviceId)) ||
+               (currentAddress?.let { isOppoAddress(it) } ?: false)
+    }
+
+    private fun setHeadsetImage(rootView: Any, bitmap: Bitmap) {
+        val view = rootView as? android.view.View ?: return
+        val scaledBitmap = scaleToSystemSize(bitmap, view)
+        val ticId = runCatching {
+            view.context.resources.getIdentifier("tic", "id", "com.android.settings")
+        }.getOrNull()?.takeIf { it != 0 } ?: return
+        val imageView = view.findViewById<ImageView>(ticId) ?: return
+        imageView.setImageBitmap(scaledBitmap)
+        Log.d(TAG, "OPPO headset image set successfully")
+    }
+
+    private fun isOppoDeviceId(deviceId: String): Boolean {
+        return deviceId.isNotEmpty() && !deviceId.startsWith("01010607")
+    }
+
+    private fun loadOppoHeadsetImage(): Bitmap? {
+        val ctx = context ?: return null
+        val address = currentAddress ?: return null
+        val earphone = PodImagePrefs.find(prefs, address) ?: PodImagePrefs.findOrLatest(prefs, address)
+        val imagePath = earphone?.boxImagePath ?: return null
+        val uri = android.net.Uri.Builder()
+            .scheme("content")
+            .authority(PodImagePrefs.AUTHORITY)
+            .appendPath(File(imagePath).name)
+            .build()
+        return runCatching {
+            ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        }.onFailure { Log.w(TAG, "loadOppoHeadsetImage failed", it) }.getOrNull()
+    }
+
+    private fun scaleToSystemSize(bitmap: Bitmap, view: android.view.View): Bitmap {
+        val context = view.context
+        val imageSize = runCatching {
+            context.resources.getIdentifier("headset_image_size", "dimen", "com.android.settings")
+        }.getOrNull()?.takeIf { it != 0 }?.let { context.resources.getDimensionPixelSize(it) }
+            ?: (200 * context.resources.displayMetrics.density).toInt()
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width <= 0 || height <= 0) return bitmap
+        val scale = imageSize.toFloat() / maxOf(width, height)
+        return Bitmap.createScaledBitmap(bitmap, (width * scale).toInt(), (height * scale).toInt(), true)
     }
 
     private fun registerStatusReceiver(ctx: Context?) {
