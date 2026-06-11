@@ -558,7 +558,7 @@ object SettingsHeadsetHook : HookContext() {
     private fun settingsAncMode(): String {
         loadState()
         return when (currentAnc) {
-            2, 5, 6, 7, 8 -> "1"
+            2, 4, 5, 6, 7, 8 -> "1"
             3 -> "2"
             else -> "0"
         }
@@ -568,7 +568,7 @@ object SettingsHeadsetHook : HookContext() {
         loadState()
         // MIUI Settings level codes: 0103=Smart, 0101=Light, 0100=Medium, 0102=Deep, 0201=Transparency vocal enhancement.
         return when (currentAnc) {
-            5 -> "0103"
+            4, 5 -> "0103"
             6 -> "0101"
             7 -> "0100"
             8 -> "0102"

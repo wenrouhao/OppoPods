@@ -316,7 +316,7 @@ object RfcommController {
         // MIUI level codes are not ordered like OPPO payloads:
         // 0103=Smart, 0101=Light, 0100=Medium, 0102=Deep, 0201=Transparency vocal enhancement.
         return when (anc) {
-            5 -> "0103"
+            4, 5 -> "0103"
             6 -> "0101"
             7 -> "0100"
             8 -> "0102"
