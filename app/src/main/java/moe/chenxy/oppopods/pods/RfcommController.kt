@@ -683,6 +683,22 @@ object RfcommController {
             return
         }
 
+        // 0x0204 type=0xF1 无法直接解析，主动查询一次让耳机回复 0x810C
+        if (packet.size >= 10) {
+            val cmdLow = packet[4].toInt() and 0xFF
+            val cmdHigh = packet[5].toInt() and 0xFF
+            val cmd = cmdLow or (cmdHigh shl 8)
+            if (cmd == 0x0204) {
+                val reportType = packet[9].toInt() and 0xFF
+                if (reportType == 0xF1) {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        delay(100)
+                        sendPacketSafe(Enums.QUERY_ANC)
+                    }
+                }
+            }
+        }
+
         val wearResult = WearStatusParser.parse(packet)
         if (wearResult != null) {
             Log.d(TAG, "Wear status received: $wearResult")
